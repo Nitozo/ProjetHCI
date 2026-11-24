@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Simulateur: qemu-img convert -O raw SRC DST
+cp "${@: -2:1}" "${@: -1}"

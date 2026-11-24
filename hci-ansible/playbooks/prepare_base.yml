@@ -1,0 +1,51 @@
+---
+# Importe l'image modele (CirrOS par defaut) dans Ceph : vms/<base_image>
+# Usage : -e node=hci-node1 [-e base_image=cirros-base] [-e image_url=...] [-e image_file=/chemin/sur/le/noeud.qcow2]
+- name: Preparer l'image de base dans Ceph
+  hosts: "{{ node | default('hci-node1') }}"
+  gather_facts: false
+  environment:
+    LC_ALL: C
+  tasks:
+    - name: Image deja presente ?
+      ansible.builtin.command: "rbd --id {{ ceph_user }} info {{ ceph_pool }}/{{ base_image }}"
+      become: "{{ hci_become }}"
+      register: _exists
+      changed_when: false
+      failed_when: false
+
+    - name: Importer l'image
+      when: _exists.rc != 0
+      block:
+        - name: Telecharger l'image (si pas de fichier local fourni)
+          ansible.builtin.get_url:
+            url: "{{ base_image_url }}"
+            dest: "/tmp/{{ base_image }}.src"
+            mode: "0644"
+          when: image_file is not defined
+
+        - name: Convertir en raw
+          ansible.builtin.command: >-
+            qemu-img convert -O raw
+            {{ image_file | default('/tmp/' ~ base_image ~ '.src') }}
+            /tmp/{{ base_image }}.raw
+          changed_when: true
+
+        - name: Importer dans le pool RBD
+          ansible.builtin.command: >-
+            rbd --id {{ ceph_user }} import /tmp/{{ base_image }}.raw
+            {{ ceph_pool }}/{{ base_image }} --image-format 2
+          become: "{{ hci_become }}"
+          changed_when: true
+      always:
+        - name: Nettoyer les fichiers temporaires
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - "/tmp/{{ base_image }}.src"
+            - "/tmp/{{ base_image }}.raw"
+
+    - name: Resultat
+      ansible.builtin.debug:
+        msg: "Image {{ ceph_pool }}/{{ base_image }} {{ 'deja presente' if _exists.rc == 0 else 'importee' }}."

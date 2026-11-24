@@ -1,0 +1,18 @@
+---
+# Liste toutes les VM du cluster, noeud par noeud.
+- import_playbook: _discover.yml
+
+- name: Lister les VM du cluster
+  hosts: hci
+  gather_facts: false
+  environment:
+    LC_ALL: C
+  tasks:
+    - name: Etat detaille sur ce noeud
+      ansible.builtin.command: "virsh -c {{ libvirt_uri }} list --all"
+      register: _list
+      changed_when: false
+
+    - name: Afficher
+      ansible.builtin.debug:
+        msg: "{{ ['== ' ~ inventory_hostname ~ ' : ' ~ (vm_names | length) ~ ' VM, ' ~ running_count ~ ' en marche =='] + (_list.stdout_lines | reject('equalto', '') | list) }}"

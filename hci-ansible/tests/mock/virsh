@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Simulateur minimal de virsh pour les tests (etat dans $MOCK_STATE/<noeud>/)
+set -u
+uri=""; args=()
+while [ $# -gt 0 ]; do
+  case "$1" in -c) uri="$2"; shift 2 ;; *) args+=("$1"); shift ;; esac
+done
+node="${uri#mock://}"; node="${node%%/*}"
+d="$MOCK_STATE/$node"; mkdir -p "$d"
+cmd="${args[0]}"; vm="${args[-1]:-}"
+state() { cat "$d/$1.state" 2>/dev/null || echo ""; }
+need() { [ -f "$d/$1.xml" ] || { echo "erreur : domaine '$1' introuvable" >&2; exit 1; }; }
+case "$cmd" in
+  list)
+    all=0; name=0
+    for a in "${args[@]:1}"; do [ "$a" = "--all" ] && all=1; [ "$a" = "--name" ] && name=1; done
+    if [ $name -eq 0 ]; then echo " Id   Nom   Etat"; echo "-------------------"; fi
+    for x in "$d"/*.xml; do [ -e "$x" ] || continue; n=$(basename "$x" .xml); s=$(state "$n")
+      if [ "$s" = running ] || [ $all -eq 1 ]; then
+        if [ $name -eq 1 ]; then echo "$n"; else echo " -    $n   $([ "$s" = running ] && echo running || echo 'shut off')"; fi
+      fi; done
+    echo ;;
+  define)
+    xml=$(cat); n=$(echo "$xml" | sed -n "s:.*<name>\(.*\)</name>.*:\1:p" | head -1)
+    echo "$xml" | xmllint --noout - || exit 1
+    echo "$xml" | grep -q "protocol='rbd'" || { echo "pas de disque rbd" >&2; exit 1; }
+    echo "$xml" > "$d/$n.xml"; echo "shut off" > "$d/$n.state"; echo "Domain '$n' defined" ;;
+  start) need "$vm"; [ "$(state "$vm")" = running ] && { echo "deja demarre" >&2; exit 1; }; echo running > "$d/$vm.state"; echo "Domain '$vm' started" ;;
+  domstate) need "$vm"; state "$vm" ;;
+  shutdown) need "$vm"; echo "shut off" > "$d/$vm.state"; echo "Domain '$vm' is being shutdown" ;;
+  destroy) need "$vm"; echo "shut off" > "$d/$vm.state" ;;
+  undefine) need "$vm"; rm -f "$d/$vm.xml" "$d/$vm.state" ;;
+  dominfo) need "$vm"; echo "Name: $vm"; echo "State: $(state "$vm")"; echo "CPU(s): 1" ;;
+  domblklist) need "$vm"; echo " Target Source"; echo " vda    vms/$vm" ;;
+  domifaddr) need "$vm"; echo " Name MAC Protocol Address"; echo "----"
+    [ "$(state "$vm")" = running ] && echo " vnet0 52:54:00:00:00:01 ipv4 192.168.122.50/24" ; true ;;
+  migrate)
+    live=0; off=0; persist=0; undef=0; i=1
+    while [ $i -lt ${#args[@]} ]; do a="${args[$i]}"
+      case "$a" in --live) live=1 ;; --offline) off=1 ;; --persistent) persist=1 ;; --undefinesource) undef=1 ;;
+        --migrateuri) i=$((i+1)) ;; --verbose) ;; *) rest+=("$a") ;; esac; i=$((i+1)); done
+    m="${rest[0]}"; dst="${rest[1]}"; need "$m"
+    [ $persist -eq 1 ] && [ $undef -eq 1 ] || { echo "il manque --persistent/--undefinesource" >&2; exit 1; }
+    s=$(state "$m")
+    [ "$s" = running ] && [ $live -eq 0 ] && { echo "live requis" >&2; exit 1; }
+    [ "$s" != running ] && [ $off -eq 0 ] && { echo "offline requis" >&2; exit 1; }
+    dn="${dst#*@}"; dn="${dn%%/*}"; mkdir -p "$MOCK_STATE/$dn"
+    mv "$d/$m.xml" "$MOCK_STATE/$dn/$m.xml"; mv "$d/$m.state" "$MOCK_STATE/$dn/$m.state"
+    echo "Migration: [100 %]" ;;
+  *) echo "mock virsh: commande non geree: $cmd" >&2; exit 2 ;;
+esac

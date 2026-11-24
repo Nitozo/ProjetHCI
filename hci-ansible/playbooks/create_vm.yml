@@ -1,0 +1,108 @@
+---
+# Cree une VM : copie de l'image de base dans Ceph, definition libvirt, demarrage.
+# Usage : -e vm_name=web1 [-e vm_memory_mib=512 -e vm_vcpus=1 -e vm_disk_size=2G -e node=hci-node2 -e base_image=cirros-base]
+# Sans "node", la VM est placee sur le noeud qui porte le moins de VM en cours.
+- import_playbook: _discover.yml
+
+- name: Creer la VM
+  hosts: hci
+  gather_facts: false
+  environment:
+    LC_ALL: C
+  vars:
+    vm_hosts: >-
+      {{ groups['hci'] | map('extract', hostvars) | selectattr('has_vm', 'defined')
+         | selectattr('has_vm') | map(attribute='inventory_hostname') | list }}
+    chosen_node: >-
+      {{ node if (node | default('') | length > 0) else
+         (groups['hci'] | map('extract', hostvars) | selectattr('running_count', 'defined')
+          | sort(attribute='running_count') | map(attribute='inventory_hostname') | first) }}
+  tasks:
+    - name: Verifier les parametres
+      ansible.builtin.assert:
+        that:
+          - vm_name is defined
+          - vm_name is match('^[A-Za-z][A-Za-z0-9_-]{0,31}$')
+          - vm_name != base_image
+          - vm_hosts | length == 0
+          - chosen_node in groups['hci']
+          - vm_memory_mib | int > 0
+          - vm_vcpus | int > 0
+        fail_msg: >-
+          Parametres invalides ou VM deja existante (sur : {{ vm_hosts | join(',') }}).
+          Nom attendu : lettres/chiffres/-/_ (32 max).
+        quiet: true
+      run_once: true
+
+    - name: Creation sur {{ chosen_node }}
+      when: inventory_hostname == chosen_node
+      block:
+        - name: Image de base presente ?
+          ansible.builtin.command: "rbd --id {{ ceph_user }} info {{ ceph_pool }}/{{ base_image }}"
+          become: "{{ hci_become }}"
+          changed_when: false
+          register: _base
+          failed_when: false
+
+        - name: Echec si l'image de base manque
+          ansible.builtin.fail:
+            msg: "Image {{ ceph_pool }}/{{ base_image }} introuvable. Lancer d'abord : ./hcictl.sh prepare-base"
+          when: _base.rc != 0
+
+        - name: Copier l'image de base vers le disque de la VM
+          ansible.builtin.command: >-
+            rbd --id {{ ceph_user }} cp {{ ceph_pool }}/{{ base_image }} {{ ceph_pool }}/{{ vm_name }}
+          become: "{{ hci_become }}"
+          changed_when: true
+
+        - name: Agrandir le disque
+          ansible.builtin.command: >-
+            rbd --id {{ ceph_user }} resize --size {{ vm_disk_size }} {{ ceph_pool }}/{{ vm_name }}
+          become: "{{ hci_become }}"
+          changed_when: true
+          when: vm_disk_size | string | length > 0
+
+        - name: Definir la VM dans libvirt
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} define /dev/stdin"
+          args:
+            stdin: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/domain.xml.j2') }}"
+          changed_when: true
+
+        - name: Demarrer la VM
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} start {{ vm_name }}"
+          changed_when: true
+          when: start_after_create | bool
+
+        - name: Attendre l'adresse IP
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} domifaddr {{ vm_name }}"
+          register: _ip
+          changed_when: false
+          until: _ip.stdout is search('[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/')
+          retries: "{{ ((wait_ip_timeout | int) / 3) | int }}"
+          delay: 3
+          failed_when: false
+          when: start_after_create | bool and wait_ip | bool
+
+        - name: Bilan
+          ansible.builtin.debug:
+            msg:
+              - "VM {{ vm_name }} creee sur {{ inventory_hostname }} ({{ vm_vcpus }} vCPU, {{ vm_memory_mib }} MiB)"
+              - "Disque : rbd {{ ceph_pool }}/{{ vm_name }}"
+              - "IP : {{ (_ip.stdout | default('') | regex_search('[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+')) or 'non obtenue (VM arretee ou DHCP en cours)' }}"
+
+      rescue:
+        - name: Annulation - supprimer la definition libvirt
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} undefine {{ vm_name }}"
+          failed_when: false
+          changed_when: false
+
+        - name: Annulation - supprimer le disque cree
+          ansible.builtin.command: "rbd --id {{ ceph_user }} rm {{ ceph_pool }}/{{ vm_name }}"
+          become: "{{ hci_become }}"
+          failed_when: false
+          changed_when: false
+          when: _base is defined and _base.rc == 0
+
+        - name: Signaler l'echec
+          ansible.builtin.fail:
+            msg: "Creation de {{ vm_name }} echouee, modifications annulees."

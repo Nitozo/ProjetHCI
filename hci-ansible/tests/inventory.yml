@@ -1,0 +1,12 @@
+---
+all:
+  children:
+    hci:
+      hosts:
+        hci-node1: { ansible_host: 10.0.0.1, libvirt_uri: "mock://hci-node1" }
+        hci-node2: { ansible_host: 10.0.0.2, libvirt_uri: "mock://hci-node2" }
+        hci-node3: { ansible_host: 10.0.0.3, libvirt_uri: "mock://hci-node3" }
+      vars:
+        ansible_connection: local
+        ansible_user: esgi
+        hci_become: false

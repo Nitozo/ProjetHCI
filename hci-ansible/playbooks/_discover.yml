@@ -1,0 +1,28 @@
+---
+# Etape commune : interroge chaque noeud pour savoir quelles VM il porte.
+# Importee par tous les autres playbooks.
+- name: Decouverte des VM sur les noeuds
+  hosts: hci
+  gather_facts: false
+  environment:
+    LC_ALL: C
+  tasks:
+    - name: Lister les VM definies sur ce noeud
+      ansible.builtin.command: "virsh -c {{ libvirt_uri }} list --all --name"
+      register: _all
+      changed_when: false
+
+    - name: Lister les VM en cours d'execution sur ce noeud
+      ansible.builtin.command: "virsh -c {{ libvirt_uri }} list --name"
+      register: _run
+      changed_when: false
+
+    - name: Memoriser l'etat du noeud
+      ansible.builtin.set_fact:
+        vm_names: "{{ _all.stdout_lines | map('trim') | reject('equalto', '') | list }}"
+        running_names: "{{ _run.stdout_lines | map('trim') | reject('equalto', '') | list }}"
+
+    - name: Calculer la charge et la presence de la VM
+      ansible.builtin.set_fact:
+        running_count: "{{ running_names | length }}"
+        has_vm: "{{ ((vm_name | default('')) in vm_names) | bool }}"

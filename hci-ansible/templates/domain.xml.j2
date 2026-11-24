@@ -1,0 +1,36 @@
+<domain type='kvm'>
+  <name>{{ vm_name }}</name>
+  <memory unit='MiB'>{{ vm_memory_mib }}</memory>
+  <vcpu>{{ vm_vcpus }}</vcpu>
+  <os>
+    <type arch='x86_64'>hvm</type>
+    <boot dev='hd'/>
+  </os>
+  <cpu mode='host-model'/>
+  <features><acpi/><apic/></features>
+  <clock offset='utc'/>
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+  <devices>
+    <disk type='network' device='disk'>
+      <driver name='qemu' type='raw' cache='none'/>
+      <auth username='{{ ceph_user }}'>
+        <secret type='ceph' uuid='{{ secret_uuid }}'/>
+      </auth>
+      <source protocol='rbd' name='{{ ceph_pool }}/{{ vm_name }}'>
+{% for mon in ceph_monitors %}
+        <host name='{{ mon }}' port='{{ ceph_mon_port }}'/>
+{% endfor %}
+      </source>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <interface type='network'>
+      <source network='{{ vm_network }}'/>
+      <model type='virtio'/>
+    </interface>
+    <serial type='pty'/>
+    <console type='pty'/>
+    <memballoon model='virtio'/>
+  </devices>
+</domain>

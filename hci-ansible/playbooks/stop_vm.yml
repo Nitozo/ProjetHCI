@@ -1,0 +1,53 @@
+---
+# Arrete une VM (ACPI propre ; -e force=true pour couper brutalement).
+# Usage : -e vm_name=web1 [-e force=true] [-e stop_timeout=60]
+- import_playbook: _discover.yml
+
+- name: Arreter la VM
+  hosts: hci
+  gather_facts: false
+  environment:
+    LC_ALL: C
+  vars:
+    vm_hosts: >-
+      {{ groups['hci'] | map('extract', hostvars) | selectattr('has_vm', 'defined')
+         | selectattr('has_vm') | map(attribute='inventory_hostname') | list }}
+  tasks:
+    - name: Verifier que la VM existe
+      ansible.builtin.assert:
+        that:
+          - vm_name is defined
+          - vm_hosts | length == 1
+        fail_msg: "VM '{{ vm_name | default('?') }}' introuvable (ou presente sur plusieurs noeuds)."
+        quiet: true
+      run_once: true
+
+    - name: Arret
+      when: inventory_hostname in vm_hosts
+      block:
+        - name: Etat actuel
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} domstate {{ vm_name }}"
+          register: _state
+          changed_when: false
+
+        - name: Extinction brutale
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} destroy {{ vm_name }}"
+          when: _state.stdout | trim == 'running' and (force | default(false) | bool)
+          changed_when: true
+
+        - name: Extinction ACPI
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} shutdown {{ vm_name }}"
+          when: _state.stdout | trim == 'running' and not (force | default(false) | bool)
+          changed_when: true
+
+        - name: Attendre l'arret
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} domstate {{ vm_name }}"
+          register: _after
+          changed_when: false
+          until: _after.stdout | trim == 'shut off'
+          retries: "{{ ((stop_timeout | default(60) | int) / 2) | int }}"
+          delay: 2
+
+        - name: Bilan
+          ansible.builtin.debug:
+            msg: "VM {{ vm_name }} arretee sur {{ inventory_hostname }}."

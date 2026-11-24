@@ -1,0 +1,39 @@
+---
+# Demarre une VM. Usage : -e vm_name=web1
+- import_playbook: _discover.yml
+
+- name: Demarrer la VM
+  hosts: hci
+  gather_facts: false
+  environment:
+    LC_ALL: C
+  vars:
+    vm_hosts: >-
+      {{ groups['hci'] | map('extract', hostvars) | selectattr('has_vm', 'defined')
+         | selectattr('has_vm') | map(attribute='inventory_hostname') | list }}
+  tasks:
+    - name: Verifier que la VM existe
+      ansible.builtin.assert:
+        that:
+          - vm_name is defined
+          - vm_hosts | length == 1
+        fail_msg: "VM '{{ vm_name | default('?') }}' introuvable (ou presente sur plusieurs noeuds : {{ vm_hosts | join(',') }})."
+        quiet: true
+      run_once: true
+
+    - name: Demarrage
+      when: inventory_hostname in vm_hosts
+      block:
+        - name: Etat actuel
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} domstate {{ vm_name }}"
+          register: _state
+          changed_when: false
+
+        - name: Demarrer
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} start {{ vm_name }}"
+          when: _state.stdout | trim != 'running'
+          changed_when: true
+
+        - name: Bilan
+          ansible.builtin.debug:
+            msg: "VM {{ vm_name }} {{ 'deja en marche' if _state.stdout | trim == 'running' else 'demarree' }} sur {{ inventory_hostname }}."

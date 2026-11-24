@@ -1,0 +1,51 @@
+---
+# Supprime une VM (arret force + undefine + suppression du disque RBD).
+# Usage : -e vm_name=web1 [-e keep_disk=true]
+- import_playbook: _discover.yml
+
+- name: Supprimer la VM
+  hosts: hci
+  gather_facts: false
+  environment:
+    LC_ALL: C
+  vars:
+    vm_hosts: >-
+      {{ groups['hci'] | map('extract', hostvars) | selectattr('has_vm', 'defined')
+         | selectattr('has_vm') | map(attribute='inventory_hostname') | list }}
+  tasks:
+    - name: Verifier que la VM existe
+      ansible.builtin.assert:
+        that:
+          - vm_name is defined
+          - vm_name != base_image
+          - vm_hosts | length == 1
+        fail_msg: "VM '{{ vm_name | default('?') }}' introuvable, presente sur plusieurs noeuds, ou image de base protegee."
+        quiet: true
+      run_once: true
+
+    - name: Suppression
+      when: inventory_hostname in vm_hosts
+      block:
+        - name: Etat actuel
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} domstate {{ vm_name }}"
+          register: _state
+          changed_when: false
+
+        - name: Arret force si necessaire
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} destroy {{ vm_name }}"
+          when: _state.stdout | trim == 'running'
+          changed_when: true
+
+        - name: Retirer la definition libvirt
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} undefine {{ vm_name }}"
+          changed_when: true
+
+        - name: Supprimer le disque RBD
+          ansible.builtin.command: "rbd --id {{ ceph_user }} rm {{ ceph_pool }}/{{ vm_name }}"
+          become: "{{ hci_become }}"
+          changed_when: true
+          when: not (keep_disk | default(false) | bool)
+
+        - name: Bilan
+          ansible.builtin.debug:
+            msg: "VM {{ vm_name }} supprimee de {{ inventory_hostname }}{{ ' (disque conserve)' if (keep_disk | default(false) | bool) else '' }}."

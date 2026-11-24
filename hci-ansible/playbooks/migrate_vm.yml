@@ -1,0 +1,57 @@
+---
+# Migration a chaud (live) d'une VM vers un autre noeud ; stockage Ceph partage -> pas de copie de disque.
+# Usage : -e vm_name=web1 -e dest=hci-node2
+- import_playbook: _discover.yml
+
+- name: Migrer la VM
+  hosts: hci
+  gather_facts: false
+  environment:
+    LC_ALL: C
+  vars:
+    vm_hosts: >-
+      {{ groups['hci'] | map('extract', hostvars) | selectattr('has_vm', 'defined')
+         | selectattr('has_vm') | map(attribute='inventory_hostname') | list }}
+  tasks:
+    - name: Verifier les parametres
+      ansible.builtin.assert:
+        that:
+          - vm_name is defined
+          - dest is defined
+          - dest in groups['hci']
+          - vm_hosts | length == 1
+          - vm_hosts[0] != dest
+        fail_msg: >-
+          Migration impossible : VM '{{ vm_name | default('?') }}' sur {{ vm_hosts | join(',') | default('nulle part') }},
+          destination '{{ dest | default('?') }}' (doit etre un autre noeud de {{ groups['hci'] | join(',') }}).
+        quiet: true
+      run_once: true
+
+    - name: Migration depuis {{ vm_hosts[0] | default('?') }}
+      when: inventory_hostname in vm_hosts
+      block:
+        - name: Etat actuel
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} domstate {{ vm_name }}"
+          register: _state
+          changed_when: false
+
+        - name: Migrer (live si la VM tourne, offline sinon)
+          ansible.builtin.command: >-
+            virsh -c {{ libvirt_uri }} migrate
+            {{ '--live' if _state.stdout | trim == 'running' else '--offline' }}
+            --persistent --undefinesource --verbose
+            --migrateuri tcp://{{ hostvars[dest].ansible_host }}
+            {{ vm_name }}
+            qemu+ssh://{{ ansible_user }}@{{ dest }}/system?known_hosts_verify=ignore
+          register: _mig
+          changed_when: true
+
+        - name: Etat sur la destination
+          ansible.builtin.command: "virsh -c {{ hostvars[dest].libvirt_uri }} domstate {{ vm_name }}"
+          delegate_to: "{{ dest }}"
+          register: _dst
+          changed_when: false
+
+        - name: Bilan
+          ansible.builtin.debug:
+            msg: "VM {{ vm_name }} migree {{ inventory_hostname }} -> {{ dest }} (etat : {{ _dst.stdout | trim }})."

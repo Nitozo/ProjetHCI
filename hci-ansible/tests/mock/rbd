@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Simulateur minimal de rbd (etat partage dans $MOCK_STATE/rbd/)
+set -u
+args=(); while [ $# -gt 0 ]; do case "$1" in --id) shift 2 ;; *) args+=("$1"); shift ;; esac; done
+d="$MOCK_STATE/rbd"; mkdir -p "$d"
+img() { echo "${1#*/}"; }
+case "${args[0]}" in
+  info) [ -f "$d/$(img "${args[1]}")" ] || { echo "rbd: error opening image: No such file" >&2; exit 2; }; echo "rbd image '$(img "${args[1]}")': size 112 MiB" ;;
+  cp) [ -f "$d/$(img "${args[1]}")" ] || exit 2; [ -f "$d/$(img "${args[2]}")" ] && { echo "existe deja" >&2; exit 17; }; cp "$d/$(img "${args[1]}")" "$d/$(img "${args[2]}")" ;;
+  rm) [ -f "$d/$(img "${args[1]}")" ] || exit 2; rm "$d/$(img "${args[1]}")" ;;
+  resize) f="${args[-1]}"; [ -f "$d/$(img "$f")" ] || exit 2; echo resized >> "$d/$(img "$f")" ;;
+  import) cp "${args[1]}" "$d/$(img "${args[2]}")" ;;
+  *) echo "mock rbd: non gere ${args[0]}" >&2; exit 2 ;;
+esac

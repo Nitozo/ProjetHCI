@@ -1,0 +1,57 @@
+---
+# Affiche toutes les infos d'une VM. Usage : -e vm_name=web1
+- import_playbook: _discover.yml
+
+- name: Informations sur la VM
+  hosts: hci
+  gather_facts: false
+  environment:
+    LC_ALL: C
+  vars:
+    vm_hosts: >-
+      {{ groups['hci'] | map('extract', hostvars) | selectattr('has_vm', 'defined')
+         | selectattr('has_vm') | map(attribute='inventory_hostname') | list }}
+  tasks:
+    - name: Verifier que la VM existe
+      ansible.builtin.assert:
+        that:
+          - vm_name is defined
+          - vm_hosts | length == 1
+        fail_msg: "VM '{{ vm_name | default('?') }}' introuvable."
+        quiet: true
+      run_once: true
+
+    - name: Collecte
+      when: inventory_hostname in vm_hosts
+      block:
+        - name: dominfo
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} dominfo {{ vm_name }}"
+          register: _info
+          changed_when: false
+
+        - name: Etat
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} domstate {{ vm_name }}"
+          register: _state
+          changed_when: false
+
+        - name: Adresses reseau
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} domifaddr {{ vm_name }}"
+          register: _ifaddr
+          changed_when: false
+          failed_when: false
+
+        - name: Disques
+          ansible.builtin.command: "virsh -c {{ libvirt_uri }} domblklist {{ vm_name }}"
+          register: _blk
+          changed_when: false
+
+        - name: Image RBD
+          ansible.builtin.command: "rbd --id {{ ceph_user }} info {{ ceph_pool }}/{{ vm_name }}"
+          become: "{{ hci_become }}"
+          register: _rbd
+          changed_when: false
+          failed_when: false
+
+        - name: Affichage
+          ansible.builtin.debug:
+            msg: "{{ ['== VM ' ~ vm_name ~ ' (noeud : ' ~ inventory_hostname ~ ', etat : ' ~ (_state.stdout | trim) ~ ') =='] + ['-- dominfo --'] + _info.stdout_lines + ['-- reseau --'] + _ifaddr.stdout_lines + ['-- disques --'] + _blk.stdout_lines + ['-- ceph --'] + _rbd.stdout_lines }}"

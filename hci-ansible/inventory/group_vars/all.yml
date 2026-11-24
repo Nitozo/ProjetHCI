@@ -1,0 +1,27 @@
+---
+# ---- Connexion libvirt ----
+libvirt_uri: "qemu:///system"
+
+# ---- Ceph / RBD ----
+ceph_pool: vms
+ceph_user: libvirt                 # client.libvirt
+secret_uuid: "3f1c8a52-7d4e-4b8a-9c2e-5a6b7c8d9e01"
+ceph_monitors:
+  - 192.168.20.101
+  - 192.168.20.102
+  - 192.168.20.103
+ceph_mon_port: 6789
+hci_become: true                   # sudo pour les commandes rbd (keyring)
+
+# ---- Valeurs par defaut des VM ----
+base_image: cirros-base            # image RBD modele (vms/cirros-base)
+vm_memory_mib: 256
+vm_vcpus: 1
+vm_disk_size: ""                   # ex: 2G pour agrandir le disque apres copie
+vm_network: default                # reseau libvirt (NAT)
+start_after_create: true
+wait_ip: true
+wait_ip_timeout: 90
+
+# ---- Image de base (prepare_base.yml) ----
+base_image_url: "https://download.cirros-cloud.net/0.6.2/cirros-0.6.2-x86_64-disk.img"
